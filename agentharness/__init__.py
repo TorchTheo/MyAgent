@@ -27,4 +27,4 @@ __all__ = [
     "Plugin", "TracingPlugin", "ConsolePlugin", "ToolPolicyPlugin",
     "Tool", "ToolError", "ToolRegistry", "builtin_tools", "tool",
 ]
-__version__ = "0.1.0"
+__version__ = "0.0.1"

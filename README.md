@@ -8,6 +8,12 @@
 - **插件热插拔**：运行时 `load/unload`，或监听目录自动加载/重载/卸载 `.py` 插件
 - **多 agent**：`agent.as_tool()`（主管/子 agent）、`Sequential`（流水线）、`Parallel`（并发 + 聚合），可任意嵌套，共享同一条 trace
 
+## 安装
+
+```bash
+pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.1"
+```
+
 ## 快速开始
 
 ```bash
