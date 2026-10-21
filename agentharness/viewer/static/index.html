@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentharness · Trace Viewer</title>
+<style>
+:root{
+  --bg:#0d1017; --panel:#141923; --panel2:#1a2030; --line:#262e40; --text:#d8dee9; --muted:#8792a8;
+  --accent:#7aa2f7; --agent:#bb9af7; --llm:#7aa2f7; --tool:#9ece6a; --workflow:#e0af68; --step:#73daca;
+  --err:#f7768e; --sel:#22304d; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.app{display:grid;grid-template-columns:300px 1fr;height:100vh}
+aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+.brand{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.brand h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+.brand .dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--agent),var(--llm))}
+.search{padding:10px 12px;border-bottom:1px solid var(--line)}
+.search input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+#traces{overflow:auto;flex:1;list-style:none;margin:0;padding:6px}
+#traces li{margin:0}
+.trace-btn{width:100%;text-align:left;background:none;border:1px solid transparent;border-radius:8px;padding:9px 10px;cursor:pointer;display:block}
+.trace-btn:hover{background:var(--panel2)}
+.trace-btn[aria-current="true"]{background:var(--sel);border-color:#33466e}
+.trace-btn .t1{display:flex;justify-content:space-between;gap:6px;font-weight:600}
+.trace-btn .t2{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trace-btn .t3{color:var(--muted);font-size:11.5px;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+.badge{display:inline-block;font-size:11px;padding:0 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-weight:500}
+.badge.err{color:var(--err);border-color:#5a2a37}
+.badge.run{color:var(--workflow);border-color:#5a4a2a}
+main{display:grid;grid-template-rows:auto 1fr;min-height:0;min-width:0}
+.top{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;flex-wrap:wrap;min-height:58px}
+.top h2{margin:0;font-size:16px}
+.stats{display:flex;gap:14px;color:var(--muted);font-size:12.5px;flex-wrap:wrap}
+.stats b{color:var(--text);font-weight:600}
+.top .spacer{flex:1}
+.filters{display:flex;gap:6px}
+.chip{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer}
+.chip[aria-pressed="false"]{opacity:.45}
+.body{display:grid;grid-template-columns:minmax(380px,46%) 1fr;min-height:0}
+.tree{overflow:auto;border-right:1px solid var(--line);padding:6px 0}
+.row{display:grid;grid-template-columns:minmax(180px,1fr) 34% 64px;align-items:center;gap:8px;padding:3px 12px 3px 0;cursor:pointer;border:0;background:none;width:100%;text-align:left}
+.row:hover{background:var(--panel)}
+.row[aria-selected="true"]{background:var(--sel)}
+.row .label{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
+.row .label .name{overflow:hidden;text-overflow:ellipsis}
+.row .twisty{width:16px;flex:none;color:var(--muted);text-align:center;font-size:10px}
+.kind{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:0 5px;border-radius:4px;flex:none}
+.k-agent{color:var(--agent);background:#bb9af71f}.k-llm{color:var(--llm);background:#7aa2f71f}
+.k-tool{color:var(--tool);background:#9ece6a1f}.k-workflow{color:var(--workflow);background:#e0af681f}
+.k-step,.k-custom{color:var(--step);background:#73daca1f}.k-log{color:var(--muted);background:#8792a81f}
+.bar-wrap{position:relative;height:10px;background:#ffffff08;border-radius:3px}
+.bar{position:absolute;top:0;height:100%;border-radius:3px;min-width:2px}
+.b-agent{background:var(--agent)}.b-llm{background:var(--llm)}.b-tool{background:var(--tool)}.b-workflow{background:var(--workflow)}.b-step,.b-custom{background:var(--step)}
+.bar.err{background:var(--err)!important}
+.dur{color:var(--muted);font-size:12px;text-align:right;font-family:var(--mono)}
+.row .errmark{color:var(--err);font-size:12px}
+.row .meta{color:var(--muted);font-size:11.5px}
+.detail{overflow:auto;padding:16px 20px 40px;min-width:0}
+.empty{color:var(--muted);padding:40px;text-align:center}
+.d-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.d-head h3{margin:0;font-size:16px}
+.kv{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:12.5px;margin-bottom:14px}
+.kv b{color:var(--text);font-weight:600}
+section.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin:12px 0;overflow:hidden}
+section.card>h4{margin:0;padding:8px 12px;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.card .inner{padding:10px 12px}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12.5px/1.55 var(--mono)}
+.msg{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;background:var(--panel2);border-radius:0 8px 8px 0}
+.msg .role{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;display:flex;gap:8px;align-items:center}
+.msg.system{border-color:#565f89}.msg.system .role{color:#9aa5ce}
+.msg.user{border-color:var(--workflow)}.msg.user .role{color:var(--workflow)}
+.msg.assistant{border-color:var(--llm)}.msg.assistant .role{color:var(--llm)}
+.msg.tool{border-color:var(--tool)}.msg.tool .role{color:var(--tool)}
+.msg.out{box-shadow:inset 0 0 0 1px #7aa2f740}
+.call{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:6px}
+.call .fn{color:var(--tool);font-family:var(--mono);font-size:12.5px;font-weight:600}
+.reason{color:var(--muted);font-style:italic}
+details>summary{cursor:pointer;color:var(--muted);font-size:12px;margin:4px 0}
+.small-btn{background:none;border:1px solid var(--line);border-radius:6px;font-size:11px;padding:1px 8px;cursor:pointer;color:var(--muted);text-transform:none;letter-spacing:0}
+.err-box{color:var(--err)}
+.logline{font-family:var(--mono);font-size:12px;color:var(--muted);padding:2px 0}
+@media (max-width:1000px){.app{grid-template-columns:1fr}aside{max-height:35vh}.body{grid-template-columns:1fr}.tree{max-height:45vh;border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside aria-label="Traces">
+    <div class="brand"><span class="dot" aria-hidden="true"></span><h1>agentharness traces</h1></div>
+    <div class="search"><label class="sr" for="q" hidden>搜索 trace</label>
+      <input id="q" type="search" placeholder="搜索 agent / 输入…" aria-label="搜索 trace"></div>
+    <ul id="traces" role="list"></ul>
+  </aside>
+  <main>
+    <div class="top">
+      <h2 id="title">选择一条 trace</h2>
+      <div class="stats" id="stats"></div>
+      <span class="spacer"></span>
+      <div class="filters" id="filters" role="group" aria-label="按类型过滤"></div>
+    </div>
+    <div class="body">
+      <div class="tree" id="tree" role="tree" aria-label="Span 树"></div>
+      <div class="detail" id="detail" aria-live="polite"><div class="empty">点击左侧 span 查看详情</div></div>
+    </div>
+  </main>
+</div>
+<script>
+"use strict";
+// All model / tool content is inserted via textContent (never innerHTML) to avoid XSS from traces.
+const $ = (s) => document.querySelector(s);
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) if (c != null) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return n;
+}
+const fmtDur = (s) => s == null ? "…" : s < 1 ? (s * 1000).toFixed(0) + "ms" : s.toFixed(2) + "s";
+const fmtTime = (ts) => new Date(ts * 1000).toLocaleString();
+const pretty = (v) => typeof v === "string" ? v : JSON.stringify(v, null, 2);
+const KINDS = ["agent", "workflow", "llm", "tool", "step", "log"];
+
+const S = { traces: [], current: null, spans: new Map(), roots: [], selected: null, collapsed: new Set(),
+            hidden: new Set(), filter: "", t0: 0, t1: 1, timer: null, sig: "" };
+
+async function getJSON(url) { const r = await fetch(url, { cache: "no-store" }); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+// ---------- trace list ----------
+async function loadTraces() {
+  try { S.traces = await getJSON("/api/traces"); } catch { return; }
+  renderTraceList();
+  if (!S.current && S.traces.length) {
+    const fromHash = location.hash.slice(1);
+    openTrace(S.traces.some(t => t.id === fromHash) ? fromHash : S.traces[0].id);
+  }
+}
+function renderTraceList() {
+  const q = S.filter.toLowerCase();
+  const ul = $("#traces"); ul.replaceChildren();
+  const items = S.traces.filter(t => !q || [t.name, t.input, ...(t.agents || [])].join(" ").toLowerCase().includes(q));
+  if (!items.length) ul.append(el("li", { class: "empty", text: S.traces.length ? "无匹配" : "还没有 trace，运行一个 agent 吧" }));
+  for (const t of items) {
+    ul.append(el("li", {}, el("button", { class: "trace-btn", "aria-current": String(t.id === S.current), onclick: () => openTrace(t.id) },
+      el("div", { class: "t1" }, el("span", { text: t.name || t.id }),
+        t.running ? el("span", { class: "badge run", text: "running" }) : t.errors ? el("span", { class: "badge err", text: t.errors + " err" }) : el("span", { class: "badge", text: fmtDur(t.duration) })),
+      el("div", { class: "t2", text: t.input || "" }),
+      el("div", { class: "t3" }, el("span", { text: fmtTime(t.start) }), el("span", { text: `${t.llm_calls} LLM · ${t.tool_calls} tool · ${t.tokens} tok` })))));
+  }
+}
+
+// ---------- one trace ----------
+async function openTrace(id, keepSelection) {
+  if (S.current !== id) { S.selected = null; S.collapsed.clear(); S.sig = ""; }
+  S.current = id; history.replaceState(null, "", "#" + id);
+  renderTraceList();
+  let events; try { events = await getJSON("/api/traces/" + encodeURIComponent(id)); } catch { return; }
+  const sig = events.length + ":" + (events.at(-1) || {}).ts;
+  if (sig === S.sig) return; S.sig = sig;
+  buildSpans(events);
+  renderHeader(); renderTree();
+  if (!S.selected && S.roots[0]) S.selected = S.roots[0].id;
+  renderDetail();
+  clearTimeout(S.timer);
+  if (S.roots.some(r => r.end == null)) S.timer = setTimeout(() => openTrace(id, true), 1500); // live tail
+}
+function buildSpans(events) {
+  const spans = new Map(); const orphanLogs = [];
+  for (const e of events) {
+    if (e.type === "span_start") spans.set(e.span_id, { id: e.span_id, parent: e.parent_id, kind: e.kind, name: e.name,
+      start: e.ts, end: null, input: e.data.input, attrs: { ...(e.data.attrs || {}) }, children: [], logs: [] });
+  }
+  for (const e of events) {
+    const s = spans.get(e.span_id);
+    if (e.type === "span_end" && s) { s.end = e.ts; s.duration = e.data.duration; s.output = e.data.output; s.error = e.data.error; Object.assign(s.attrs, e.data.attrs || {}); }
+    else if (e.type === "log") (s ? s.logs : orphanLogs).push(e);
+  }
+  const roots = [];
+  for (const s of spans.values()) { const p = spans.get(s.parent); (p ? p.children : roots).push(s); }
+  for (const s of spans.values()) s.children.sort((a, b) => a.start - b.start);
+  roots.sort((a, b) => a.start - b.start);
+  S.spans = spans; S.roots = roots;
+  const all = [...spans.values()];
+  S.t0 = Math.min(...all.map(s => s.start)); S.t1 = Math.max(...all.map(s => s.end ?? Date.now() / 1000)); if (S.t1 <= S.t0) S.t1 = S.t0 + 1e-3;
+}
+function renderHeader() {
+  const all = [...S.spans.values()]; const root = S.roots[0];
+  const llm = all.filter(s => s.kind === "llm");
+  const u = llm.reduce((a, s) => { const x = s.attrs.usage || {}; a.p += x.prompt_tokens || 0; a.c += x.completion_tokens || 0; return a; }, { p: 0, c: 0 });
+  $("#title").textContent = root ? root.name : S.current;
+  const stat = (k, v) => el("span", {}, k + " ", el("b", { text: v }));
+  $("#stats").replaceChildren(stat("耗时", fmtDur(root && root.duration)), stat("Agents", all.filter(s => s.kind === "agent").length),
+    stat("LLM 调用", llm.length), stat("工具调用", all.filter(s => s.kind === "tool").length),
+    stat("Tokens", `${u.p + u.c} (in ${u.p} / out ${u.c})`), stat("错误", all.filter(s => s.error).length));
+  const f = $("#filters"); f.replaceChildren();
+  for (const k of KINDS.filter(k => k !== "log" && all.some(s => s.kind === k))) {
+    f.append(el("button", { class: "chip k-" + k, "aria-pressed": String(!S.hidden.has(k)), text: k,
+      onclick: () => { S.hidden.has(k) ? S.hidden.delete(k) : S.hidden.add(k); renderHeader(); renderTree(); } }));
+  }
+}
+function visibleChildren(s) {  // hidden kinds are skipped but their children are lifted up
+  const out = [];
+  for (const c of s.children) S.hidden.has(c.kind) ? out.push(...visibleChildren(c)) : out.push(c);
+  return out;
+}
+function renderTree() {
+  const tree = $("#tree"); tree.replaceChildren();
+  const span = S.t1 - S.t0;
+  const walk = (s, depth) => {
+    const kids = visibleChildren(s); const open = !S.collapsed.has(s.id);
+    const left = ((s.start - S.t0) / span) * 100; const width = (((s.end ?? S.t1) - s.start) / span) * 100;
+    const u = s.attrs.usage;
+    const meta = s.kind === "llm" && u ? `${u.total_tokens} tok` : s.kind === "agent" && s.attrs.steps ? `${s.attrs.steps} steps` : "";
+    const row = el("button", { class: "row", role: "treeitem", "aria-selected": String(s.id === S.selected), "aria-expanded": kids.length ? String(open) : null,
+      "aria-level": depth + 1, title: `${s.kind}: ${s.name}`, onclick: () => { S.selected = s.id; renderTree(); renderDetail(); } },
+      el("span", { class: "label", style: `padding-left:${8 + depth * 16}px` },
+        el("span", { class: "twisty", "aria-hidden": "true", text: kids.length ? (open ? "▼" : "▶") : "",
+          onclick: (ev) => { if (!kids.length) return; ev.stopPropagation(); open ? S.collapsed.add(s.id) : S.collapsed.delete(s.id); renderTree(); } }),
+        el("span", { class: "kind k-" + s.kind, text: s.kind }), el("span", { class: "name", text: s.name }),
+        s.error ? el("span", { class: "errmark", text: "●", title: s.error, "aria-label": "error" }) : null,
+        meta ? el("span", { class: "meta", text: meta }) : null),
+      el("span", { class: "bar-wrap", "aria-hidden": "true" }, el("span", { class: `bar b-${s.kind}${s.error ? " err" : ""}`, style: `left:${left}%;width:${Math.max(width, 0.3)}%` })),
+      el("span", { class: "dur", text: fmtDur(s.duration) }));
+    tree.append(row);
+    if (open) for (const c of kids) walk(c, depth + 1);
+  };
+  for (const r of S.roots) S.hidden.has(r.kind) ? visibleChildren(r).forEach(c => walk(c, 0)) : walk(r, 0);
+}
+
+// ---------- detail ----------
+function card(title, body, copyText) {
+  const h = el("h4", {}, el("span", { text: title }));
+  if (copyText != null) h.append(el("button", { class: "small-btn", text: "复制", onclick: (e) => { navigator.clipboard?.writeText(copyText); e.target.textContent = "已复制"; } }));
+  return el("section", { class: "card" }, h, el("div", { class: "inner" }, body));
+}
+function msgView(m, extraClass) {
+  const box = el("div", { class: `msg ${m.role} ${extraClass || ""}` },
+    el("div", { class: "role" }, el("span", { text: m.role }), m.name ? el("span", { class: "badge", text: m.name }) : null,
+      m.tool_call_id ? el("span", { class: "badge", text: m.tool_call_id }) : null));
+  if (m.reasoning) box.append(el("details", {}, el("summary", { text: "reasoning" }), el("pre", { class: "reason", text: m.reasoning })));
+  if (m.content) {
+    const long = m.role === "system" || m.content.length > 1500;
+    box.append(long ? el("details", { open: m.role !== "system" }, el("summary", { text: `${m.content.length} chars` }), el("pre", { text: m.content })) : el("pre", { text: m.content }));
+  }
+  for (const c of m.tool_calls || []) box.append(el("div", { class: "call" }, el("div", { class: "fn", text: `→ ${c.name}()` }), el("pre", { text: pretty(c.arguments) })));
+  return box;
+}
+function renderDetail() {
+  const d = $("#detail"); const s = S.spans.get(S.selected);
+  if (!s) { d.replaceChildren(el("div", { class: "empty", text: "点击左侧 span 查看详情" })); return; }
+  const a = s.attrs; const kv = [];
+  const add = (k, v) => v != null && v !== "" && kv.push(el("span", {}, k + " ", el("b", { text: String(v) })));
+  add("耗时", fmtDur(s.duration)); add("开始", fmtTime(s.start));
+  if (s.kind === "llm") { add("agent", a.agent); add("step", a.step); add("model", a.model); add("finish", a.finish_reason);
+    if (a.usage) add("tokens", `${a.usage.total_tokens} (in ${a.usage.prompt_tokens} / out ${a.usage.completion_tokens})`); }
+  if (s.kind === "agent") { add("model", a.model); add("steps", a.steps); add("stop", a.stop_reason); add("depth", a.depth);
+    if (a.usage) add("tokens", a.usage.total_tokens); }
+  if (s.kind === "tool") { add("agent", a.agent); add("call_id", a.call_id); if (a.intercepted) add("intercepted", "by plugin"); }
+  if (s.kind === "workflow") add("type", a.type);
+  const parts = [el("div", { class: "d-head" }, el("span", { class: "kind k-" + s.kind, text: s.kind }), el("h3", { text: s.name })), el("div", { class: "kv" }, kv)];
+  if (s.error) parts.push(card("Error", el("pre", { class: "err-box", text: s.error })));
+  if (s.kind === "llm") {
+    const msgs = (s.input && s.input.messages) || [];
+    parts.push(card(`Prompt · ${msgs.length} messages`, el("div", {}, msgs.map(m => msgView(m))), JSON.stringify(msgs, null, 2)));
+    if (s.output) parts.push(card("Response", msgView(s.output, "out"), JSON.stringify(s.output, null, 2)));
+    if (a.tool_schemas && a.tool_schemas.length) parts.push(card(`Tools · ${a.tool_schemas.length}`,
+      el("div", {}, a.tool_schemas.map(t => el("details", {}, el("summary", { text: `${t.function.name} — ${t.function.description}` }), el("pre", { text: pretty(t.function.parameters) }))))));
+  } else {
+    if (s.input !== undefined && s.input !== null) parts.push(card(s.kind === "tool" ? "Arguments" : "Input", el("pre", { text: pretty(s.input) }), pretty(s.input)));
+    if (s.output !== undefined && s.output !== null) parts.push(card(s.kind === "tool" ? "Result" : "Output", el("pre", { text: pretty(s.output) }), pretty(s.output)));
+    if (s.kind === "agent") {  // condensed transcript: final message of each llm child
+      const steps = s.children.filter(c => c.kind === "llm" || c.kind === "tool");
+      if (steps.length) parts.push(card("Trajectory", el("div", {}, steps.map(c => c.kind === "llm" && c.output ? msgView(c.output)
+        : el("div", { class: "msg tool" }, el("div", { class: "role", text: `tool · ${c.name}` }), el("pre", { text: String(c.output ?? "").slice(0, 2000) }))))));
+    }
+  }
+  if (s.logs.length) parts.push(card("Logs", el("div", {}, s.logs.map(l => el("div", { class: "logline", text: `${new Date(l.ts * 1000).toLocaleTimeString()}  ${l.name}` })))));
+  const extra = Object.fromEntries(Object.entries(a).filter(([k]) => !["usage", "tool_schemas", "agent", "step", "model", "finish_reason", "steps", "stop_reason", "depth", "call_id", "type", "intercepted"].includes(k)));
+  if (Object.keys(extra).length) parts.push(card("Attributes", el("pre", { text: pretty(extra) })));
+  d.replaceChildren(...parts); d.scrollTop = 0;
+}
+
+$("#q").addEventListener("input", (e) => { S.filter = e.target.value; renderTraceList(); });
+loadTraces(); setInterval(loadTraces, 4000);
+</script>
+</body>
+</html>
