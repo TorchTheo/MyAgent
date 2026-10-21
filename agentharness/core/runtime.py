@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import threading
+import traceback
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from agentharness.core.events import Event
 from agentharness.plugins.base import Plugin
@@ -26,6 +27,7 @@ class Runtime:
         *,
         trace_dir: str | Path = "traces",
         tracing: bool = True,
+        trace_stream: bool = False,
         allow_outside_workspace: bool = False,
         plugins: Iterable[Plugin] = (),
     ):
@@ -34,13 +36,29 @@ class Runtime:
         self.trace_dir = Path(trace_dir).resolve()
         self.tools = ToolRegistry()
         self.plugins = PluginManager(self)
+        self._listeners: tuple[Callable[[Event], None], ...] = ()
+        self._listeners_lock = threading.Lock()
         if tracing:
-            self.plugins.load(TracingPlugin(self.trace_dir))
+            self.plugins.load(TracingPlugin(self.trace_dir, record_stream=trace_stream))
         for p in plugins:
             self.plugins.load(p)
 
     def emit(self, event: Event) -> None:
         self.plugins.emit(event)
+        for fn in self._listeners:
+            try:
+                fn(event)
+            except Exception:
+                traceback.print_exc()
+
+    def add_listener(self, fn: Callable[[Event], None]) -> None:
+        """Lightweight event subscriber (no hooks, no tools); used by ``RunStream``."""
+        with self._listeners_lock:
+            self._listeners = self._listeners + (fn,)
+
+    def remove_listener(self, fn: Callable[[Event], None]) -> None:
+        with self._listeners_lock:
+            self._listeners = tuple(f for f in self._listeners if f != fn)
 
 
 _default: Runtime | None = None

@@ -180,7 +180,11 @@ class Greeter(Plugin):
         f.write_text(src.format(msg="v2"))
         import os
         os.utime(f, (time.time() + 5, time.time() + 5))  # guarantee a new mtime
-        _wait(lambda: "reload" in changes)
+        _wait(lambda: rt.tools.get("greet") and rt.tools.get("greet").run(None, {}) == "v2")
+        # a broken edit keeps the previous version loaded
+        f.write_text("this is not python")
+        os.utime(f, (time.time() + 10, time.time() + 10))
+        _wait(lambda: "error" in changes)
         assert rt.tools.get("greet").run(None, {}) == "v2"
         assert rt.plugins.names().count("greeter") == 1
         f.unlink()
@@ -309,5 +313,9 @@ def test_viewer_api(rt):
         assert "Trace Viewer" in html and "innerHTML" not in html.replace("never innerHTML", "")
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(base + "/api/traces/..%2F..%2Fetc%2Fpasswd")
+        # externally named trace files (with dots) are served too
+        (rt.trace_dir / f"{r.trace_id}.jsonl").rename(rt.trace_dir / "case-1.harness.jsonl")
+        assert json.loads(urllib.request.urlopen(base + "/api/traces").read())[0]["id"] == "case-1.harness"
+        assert len(json.loads(urllib.request.urlopen(base + "/api/traces/case-1.harness").read())) == 4
     finally:
         srv.shutdown()

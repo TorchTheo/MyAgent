@@ -1,5 +1,9 @@
 """The agent loop.
 
+Inside ``agent.stream(...)`` the LLM is called through ``llm.stream`` and every delta is
+emitted as a ``stream`` event; otherwise ``llm.complete`` is used. Either way the final
+``LLMResponse`` (and therefore the trace) is identical.
+
     messages = [system, *history, user]
     repeat up to max_steps:
         request = before_llm(messages, tools)        # plugins may rewrite
@@ -23,8 +27,9 @@ from typing import Any, Callable, Sequence
 from agentharness.core.context import RunContext
 from agentharness.core.messages import LLMResponse, Message, ToolCall, Usage
 from agentharness.core.runtime import Runtime, default_runtime
-from agentharness.core.tracing import current_span, span
-from agentharness.llm.base import LLM, LLMRequest
+from agentharness.core.streaming import RunCancelled, RunStream, current_stream
+from agentharness.core.tracing import emit_stream, span
+from agentharness.llm.base import LLM, LLMError, LLMRequest
 from agentharness.tools.base import Tool, ToolError
 
 Instructions = str | Callable[[RunContext], str]
@@ -58,6 +63,11 @@ class Runnable:
         if ctx is not None:
             return ctx.fork(self.name)
         return RunContext(self.runtime or default_runtime(), self.name)
+
+    def stream(self, input: Any, ctx: RunContext | None = None) -> "RunStream":
+        """Run in a background thread, streaming span/log/token events. See ``agentharness.core.streaming``."""
+        rt = ctx.runtime if ctx is not None else (self.runtime or default_runtime())
+        return RunStream(self, input, ctx, rt)
 
     def as_tool(self, name: str | None = None, description: str | None = None) -> Tool:
         """Expose this agent/workflow as a tool for another agent (supervisor / sub-agent pattern)."""
@@ -150,7 +160,10 @@ class Agent(Runnable):
         rt = ctx.runtime
         usage = Usage()
         last_text: str | None = None
+        st = current_stream()
         for step in range(1, self.max_steps + 1):
+            if st is not None and st.cancelled.is_set():
+                raise RunCancelled("stream cancelled")
             tools = self.resolve_tools(ctx)
             request = LLMRequest(messages=messages, tools=[t.schema() for t in tools.values()],
                                  params=dict(self.llm_params))
@@ -179,18 +192,45 @@ class Agent(Runnable):
     def _call_llm(self, ctx: RunContext, request: LLMRequest, step: int) -> LLMResponse:
         rt = ctx.runtime
         model = getattr(self.llm, "model", "?")
+        st = current_stream()
         with span(rt, "llm", model, input={
             "messages": [m.to_dict() for m in request.messages],
             "tools": [t["function"]["name"] for t in request.tools],
             "params": request.params,
-        }, step=step, agent=self.name, tool_schemas=request.tools) as sp:
-            response = self.llm.complete(list(request.messages), request.tools or None, **request.params)
+        }, step=step, agent=self.name, tool_schemas=request.tools, stream=st is not None) as sp:
+            if st is None:
+                response = self.llm.complete(list(request.messages), request.tools or None, **request.params)
+            else:
+                response = self._consume_stream(ctx, request, sp, st, step)
             for _, r in rt.plugins.call("after_llm", ctx, self, response):
                 if isinstance(r, LLMResponse):
                     response = r
             sp.set_output(response.message.to_dict())
             sp.set(usage=response.usage.to_dict(), finish_reason=response.finish_reason,
                    model=response.model or model)
+        return response
+
+    def _consume_stream(self, ctx: RunContext, request: LLMRequest, sp: Any, st: Any, step: int) -> LLMResponse:
+        rt = ctx.runtime
+        response: LLMResponse | None = None
+        it = self.llm.stream(list(request.messages), request.tools or None, **request.params)
+        try:
+            for d in it:
+                if st.cancelled.is_set():
+                    raise RunCancelled("stream cancelled")
+                if d.type == "done":
+                    response = d.response
+                    break
+                data: dict[str, Any] = {"type": d.type, "delta": d.delta, "agent": self.name, "step": step}
+                if d.type == "tool_call":
+                    data.update(index=d.index, id=d.id, name=d.name)
+                emit_stream(rt, sp, data)
+        finally:
+            close = getattr(it, "close", None)
+            if close:
+                close()  # release the HTTP connection when stopping early
+        if response is None:
+            raise LLMError(f"{type(self.llm).__name__}.stream ended without a 'done' delta")
         return response
 
     def _execute_tools(self, ctx: RunContext, calls: list[ToolCall], tools: dict[str, Tool]) -> list[Message]:

@@ -6,12 +6,13 @@
 - **Tools**：`@tool` 从类型注解 + docstring 自动生成 JSON Schema；内置 `read_file / write_file / edit_file / list_dir / find_files / grep / bash`
 - **可观测**：所有 agent / LLM / tool / workflow 都是嵌套 span，写入 `traces/<trace_id>.jsonl`；自带 Web 查看器
 - **插件热插拔**：运行时 `load/unload`，或监听目录自动加载/重载/卸载 `.py` 插件
+- **流式输出**：`agent.stream()` 实时产出 token 增量和 span 事件，OpenAI 兼容后端走真实 SSE，支持中途取消
 - **多 agent**：`agent.as_tool()`（主管/子 agent）、`Sequential`（流水线）、`Parallel`（并发 + 聚合），可任意嵌套，共享同一条 trace
 
 ## 安装
 
 ```bash
-pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.1"
+pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.2"
 ```
 
 ## 快速开始
@@ -101,9 +102,36 @@ pipeline = Sequential([supervisor, review, lambda out, ctx: out.strip()], runtim
 result = pipeline.run("...")
 ```
 
+### 流式输出
+
+任何 `Agent` / `Sequential` / `Parallel` 都可以 `.stream(input)`：后台线程运行，实时产出事件。
+
+```python
+s = agent.stream("分析这个仓库")
+for delta in s.text():               # 只要助手文本；s.text(agent="writer") 可只看某个 agent
+    print(delta, end="", flush=True)
+result = s.result                    # RunResult，和 run() 完全一致；运行中的异常会在这里重新抛出
+
+for e in agent.stream("..."):        # 完整事件流
+    if e.type == "stream":           # e.data = {type: text|reasoning|tool_call, delta, agent, step, ...}
+        ...
+    elif e.type == "span_start" and e.kind == "tool":
+        ...
+```
+
+- 多 agent 下整棵树（子 agent、Parallel 分支）都在流里，用 `e.data["agent"]` 区分。
+- 工具调用参数也会以 `tool_call` 增量流出；工具本身在参数完整后才执行。
+- `break` 出循环或 `s.cancel()` 会在下一个 delta / 下一步停止运行并关闭 HTTP 连接，`s.result` 抛 `RunCancelled`。
+- `OpenAICompatLLM` 走真实 SSE（默认带 `stream_options.include_usage`，不支持的服务端传 `stream_usage=False`）。
+  自定义后端只实现 `complete` 也能用：默认 `stream()` 会把完整结果一次性作为 delta 发出；要真流式就覆写 `stream()`，
+  按顺序 yield `StreamDelta`，最后一个必须是 `StreamDelta("done", response=LLMResponse(...))`。
+- `ConsolePlugin` 在流式运行时实时打印模型输出。
+- token 增量默认**不写入 trace**（文件会变得很大，最终内容始终会记录）。`Runtime(trace_stream=True)` 开启后，
+  查看器会对运行中的 trace 实时显示正在生成的内容。
+
 ## Trace 格式
 
-每行一个事件：`{type: span_start|span_end|log, trace_id, span_id, parent_id, kind, name, data, ts}`。
+每行一个事件：`{type: span_start|span_end|log|stream, trace_id, span_id, parent_id, kind, name, data, ts}`。
 LLM span 的 `span_start.data.input.messages` 是完整 prompt，`span_end.data.output` 是模型回复，`attrs.usage` 是 token 用量，
 便于用 pandas 做轨迹分析或导出 SFT/RL 数据。
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 import copy
 import threading
 import time
-from typing import Any, Callable, Union
+from typing import Any, Callable, Iterator, Union
 
 from agentharness.core.messages import LLMResponse, Message, ToolCall, Usage
-from agentharness.llm.base import LLM, LLMError
+from agentharness.llm.base import LLM, LLMError, StreamDelta, split_response
 
 Step = Union[Message, Callable[[list[Message], list[dict[str, Any]]], Message]]
 
@@ -19,9 +19,12 @@ class ScriptedLLM(LLM):
     Each step is a ``Message`` or a callable ``(messages, tools) -> Message``.
     """
 
-    def __init__(self, steps: list[Step], model: str = "scripted", latency: float = 0.0):
+    def __init__(self, steps: list[Step], model: str = "scripted", latency: float = 0.0,
+                 stream_chunk: int = 4, stream_delay: float = 0.0):
         self.model = model
         self.latency = latency
+        self.stream_chunk = stream_chunk  # characters per streamed delta
+        self.stream_delay = stream_delay  # seconds between deltas (to simulate token streaming)
         self._steps = list(steps)
         self._lock = threading.Lock()
         self.requests: list[list[Message]] = []
@@ -38,6 +41,9 @@ class ScriptedLLM(LLM):
     @staticmethod
     def tool_calls(*calls: tuple[str, dict[str, Any]], content: str | None = None) -> Message:
         return Message.assistant(content, [ToolCall(n, a) for n, a in calls])
+
+    def stream(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **params: Any) -> Iterator[StreamDelta]:
+        yield from split_response(self.complete(messages, tools, **params), self.stream_chunk, self.stream_delay)
 
     def complete(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **params: Any) -> LLMResponse:
         with self._lock:

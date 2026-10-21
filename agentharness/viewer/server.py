@@ -14,7 +14,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 _STATIC = Path(__file__).parent / "static"
-_TRACE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+# file stem of a trace; dots allowed (e.g. "case.harness") but no leading dot / path separators
+_TRACE_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}$")
 
 
 def read_events(path: Path) -> list[dict[str, Any]]:

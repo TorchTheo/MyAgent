@@ -10,11 +10,11 @@
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import sys
 import threading
 import traceback
+import types
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -85,24 +85,28 @@ class PluginManager:
 
         The module may expose ``plugins = [...]``, ``plugin = ...``, a ``setup(runtime)``
         function returning plugin(s), or simply define ``Plugin`` subclasses.
-        Reloading the same file first unloads what it previously loaded.
+        Reloading the same file replaces what it previously loaded; if the new version
+        fails to import, the previous version stays loaded.
         """
         path = Path(path).resolve()
         with self._lock:
-            for name in self._sources.pop(str(path), []):
-                self.unload(name)
             mod_name = f"agentharness_plugin_{abs(hash(str(path)))}"
-            spec = importlib.util.spec_from_file_location(mod_name, path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"cannot import {path}")
-            module = importlib.util.module_from_spec(spec)
+            # Compile from source on every load. The regular import path consults __pycache__,
+            # whose staleness check (whole-second mtime + size) can serve the old bytecode when
+            # a file is edited quickly without changing its size, silently defeating hot reload.
+            source = path.read_bytes()
+            module = types.ModuleType(mod_name)
+            module.__file__ = str(path)
             sys.modules[mod_name] = module
             try:
-                spec.loader.exec_module(module)
+                exec(compile(source, str(path), "exec"), module.__dict__)
             except BaseException:
-                sys.modules.pop(mod_name, None)
-                raise
-            loaded = [self.load(p) for p in self._discover(module)]
+                raise  # previous version (if any) stays loaded
+            new_plugins = self._discover(module)
+            # swap only after the new version compiled and was discovered successfully
+            for name in self._sources.pop(str(path), []):
+                self.unload(name)
+            loaded = [self.load(p) for p in new_plugins]
             self._sources[str(path)] = [p.name for p in loaded]
             return loaded
 
@@ -142,7 +146,7 @@ class PluginManager:
         """
         directory = Path(directory).resolve()
         stop = threading.Event()
-        mtimes: dict[Path, float] = {}
+        mtimes: dict[Path, tuple[int, int]] = {}
 
         def notify(action: str, p: Path, err: BaseException | None = None) -> None:
             self._log(f"plugin {action}: {p.name}", path=str(p), error=repr(err) if err else None)
@@ -150,7 +154,7 @@ class PluginManager:
                 on_change(action, p, err)
 
         def scan() -> None:
-            current = {p: p.stat().st_mtime for p in directory.glob("*.py") if not p.name.startswith("_")}
+            current = {p: (p.stat().st_mtime_ns, p.stat().st_size) for p in directory.glob("*.py") if not p.name.startswith("_")}
             for p in list(mtimes):
                 if p not in current:
                     del mtimes[p]

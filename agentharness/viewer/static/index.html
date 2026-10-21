@@ -170,7 +170,7 @@ async function openTrace(id, keepSelection) {
   if (!S.selected && S.roots[0]) S.selected = S.roots[0].id;
   renderDetail();
   clearTimeout(S.timer);
-  if (S.roots.some(r => r.end == null)) S.timer = setTimeout(() => openTrace(id, true), 1500); // live tail
+  if (S.roots.some(r => r.end == null)) S.timer = setTimeout(() => openTrace(id, true), 700); // live tail
 }
 function buildSpans(events) {
   const spans = new Map(); const orphanLogs = [];
@@ -182,6 +182,12 @@ function buildSpans(events) {
     const s = spans.get(e.span_id);
     if (e.type === "span_end" && s) { s.end = e.ts; s.duration = e.data.duration; s.output = e.data.output; s.error = e.data.error; Object.assign(s.attrs, e.data.attrs || {}); }
     else if (e.type === "log") (s ? s.logs : orphanLogs).push(e);
+    else if (e.type === "stream" && s) {  // token deltas (Runtime(trace_stream=True))
+      const p = s.partial || (s.partial = { content: "", reasoning: "", calls: {} }); const d = e.data;
+      if (d.type === "text") p.content += d.delta || ""; else if (d.type === "reasoning") p.reasoning += d.delta || "";
+      else if (d.type === "tool_call") { const c = p.calls[d.index] || (p.calls[d.index] = { name: "", args: "" }); if (d.name) c.name = d.name; c.args += d.delta || ""; }
+      s.deltas = (s.deltas || 0) + 1;
+    }
   }
   const roots = [];
   for (const s of spans.values()) { const p = spans.get(s.parent); (p ? p.children : roots).push(s); }
@@ -260,7 +266,8 @@ function renderDetail() {
   const add = (k, v) => v != null && v !== "" && kv.push(el("span", {}, k + " ", el("b", { text: String(v) })));
   add("耗时", fmtDur(s.duration)); add("开始", fmtTime(s.start));
   if (s.kind === "llm") { add("agent", a.agent); add("step", a.step); add("model", a.model); add("finish", a.finish_reason);
-    if (a.usage) add("tokens", `${a.usage.total_tokens} (in ${a.usage.prompt_tokens} / out ${a.usage.completion_tokens})`); }
+    if (a.usage) add("tokens", `${a.usage.total_tokens} (in ${a.usage.prompt_tokens} / out ${a.usage.completion_tokens})`);
+    if (a.stream) add("stream", s.deltas ? `${s.deltas} deltas` : "yes"); }
   if (s.kind === "agent") { add("model", a.model); add("steps", a.steps); add("stop", a.stop_reason); add("depth", a.depth);
     if (a.usage) add("tokens", a.usage.total_tokens); }
   if (s.kind === "tool") { add("agent", a.agent); add("call_id", a.call_id); if (a.intercepted) add("intercepted", "by plugin"); }
@@ -271,6 +278,11 @@ function renderDetail() {
     const msgs = (s.input && s.input.messages) || [];
     parts.push(card(`Prompt · ${msgs.length} messages`, el("div", {}, msgs.map(m => msgView(m))), JSON.stringify(msgs, null, 2)));
     if (s.output) parts.push(card("Response", msgView(s.output, "out"), JSON.stringify(s.output, null, 2)));
+    else if (s.partial) {  // still generating: render what has streamed so far
+      const p = s.partial;
+      parts.push(card("Response · streaming…", msgView({ role: "assistant", content: p.content || null, reasoning: p.reasoning || null,
+        tool_calls: Object.values(p.calls).map(c => ({ name: c.name, arguments: c.args })) }, "out")));
+    }
     if (a.tool_schemas && a.tool_schemas.length) parts.push(card(`Tools · ${a.tool_schemas.length}`,
       el("div", {}, a.tool_schemas.map(t => el("details", {}, el("summary", { text: `${t.function.name} — ${t.function.description}` }), el("pre", { text: pretty(t.function.parameters) }))))));
   } else {
@@ -279,6 +291,9 @@ function renderDetail() {
     if (s.kind === "agent") {  // condensed transcript: final message of each llm child
       const steps = s.children.filter(c => c.kind === "llm" || c.kind === "tool");
       if (steps.length) parts.push(card("Trajectory", el("div", {}, steps.map(c => c.kind === "llm" && c.output ? msgView(c.output)
+        : c.kind === "llm" && c.partial ? msgView({ role: "assistant", content: (c.partial.content || "") + " ▍", reasoning: c.partial.reasoning || null,
+            tool_calls: Object.values(c.partial.calls).map(x => ({ name: x.name, arguments: x.args })) }, "out")
+        : c.kind === "llm" ? el("div", { class: "msg assistant" }, el("div", { class: "role", text: "assistant · waiting…" }))
         : el("div", { class: "msg tool" }, el("div", { class: "role", text: `tool · ${c.name}` }), el("pre", { text: String(c.output ?? "").slice(0, 2000) }))))));
     }
   }

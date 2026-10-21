@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 
-from agentharness.core.events import LOG, SPAN_END, SPAN_START, Event
+from agentharness.core.events import LOG, SPAN_END, SPAN_START, STREAM, Event
 from agentharness.core.messages import new_id
 
 if TYPE_CHECKING:
@@ -92,6 +92,11 @@ def span(runtime: "Runtime", kind: str, name: str, input: Any = None, **attrs: A
             "error": sp.error,
             "duration": t1 - t0,
         }, ts=t1))
+
+
+def emit_stream(runtime: "Runtime", sp: Span, data: dict[str, Any]) -> None:
+    """Emit a token delta belonging to span ``sp``."""
+    runtime.emit(Event(STREAM, sp.trace_id, sp.id, sp.parent_id, sp.kind, sp.name, data))
 
 
 def log(runtime: "Runtime", message: str, **data: Any) -> None:
