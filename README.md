@@ -12,7 +12,7 @@
 ## 安装
 
 ```bash
-pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.2"
+pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.3"
 ```
 
 ## 快速开始
@@ -34,6 +34,14 @@ llm = OpenAICompatLLM("deepseek-chat", base_url="https://api.deepseek.com/v1")  
 agent = Agent("coder", llm, "You are a coding agent.", tools=builtin_tools(), runtime=rt)
 print(agent.run("列出当前目录并总结项目结构").output)
 ```
+
+编码 Agent 默认会在系统提示中优先推荐当前请求中可用的内置文件工具。
+传入 `Agent(..., prefer_file_tools=False)` 可关闭这段指引。
+
+从仓库根目录运行 `python -m examples.quickstart` 可体验真实模型。
+示例读取仓库根目录 `.env` 中的 `url` 和 `key`，默认使用
+`cn:deepseek-v4.1-flash`。环境变量 `OPENAI_BASE_URL`、`OPENAI_API_KEY`
+和 `MODEL` 可以覆盖对应设置。
 
 ## 核心概念
 

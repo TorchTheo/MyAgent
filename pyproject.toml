@@ -1,6 +1,6 @@
 [project]
 name = "agentharness"
-version = "0.0.2"
+version = "0.0.3"
 description = "An extensible, observable agent harness for research: agent loop, pluggable tools, hot-swappable plugins, multi-agent workflows, trace viewer."
 requires-python = ">=3.10"
 readme = "README.md"

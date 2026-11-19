@@ -31,6 +31,16 @@ from agentharness.core.streaming import RunCancelled, RunStream, current_stream
 from agentharness.core.tracing import emit_stream, span
 from agentharness.llm.base import LLM, LLMError, LLMRequest
 from agentharness.tools.base import Tool, ToolError
+from agentharness.tools.builtin import ALL as BUILTIN_TOOLS
+
+_FILE_TOOL_GUIDANCE = {
+    "read_file": "Use `read_file` to inspect files at known paths.",
+    "list_dir": "Use `list_dir` to inspect a directory.",
+    "find_files": "Use `find_files` to locate files by name or path pattern.",
+    "grep": "Use `grep` to search file contents.",
+    "edit_file": "Use `edit_file` for targeted replacements in existing files.",
+    "write_file": "Use `write_file` to create files or replace their entire contents.",
+}
 
 Instructions = str | Callable[[RunContext], str]
 
@@ -91,6 +101,7 @@ class Agent(Runnable):
         max_tool_output_chars: int = 50_000,
         use_runtime_tools: bool = True,
         llm_params: dict[str, Any] | None = None,
+        prefer_file_tools: bool = True,
     ):
         self.name = name
         self.llm = llm
@@ -105,6 +116,7 @@ class Agent(Runnable):
         self.max_tool_output_chars = max_tool_output_chars
         self.use_runtime_tools = use_runtime_tools
         self.llm_params = dict(llm_params or {})
+        self.prefer_file_tools = prefer_file_tools
 
     # ---- tool management ---------------------------------------------
     def add_tool(self, t: Tool) -> Tool:
@@ -171,6 +183,24 @@ class Agent(Runnable):
                 if isinstance(r, LLMRequest):
                     request = r
             messages = request.messages  # plugins may compact / rewrite history
+            if self.prefer_file_tools:
+                enabled = {
+                    schema["function"]["name"] for schema in request.tools
+                    if schema.get("type") == "function"
+                }
+                rules = [
+                    rule for name, rule in _FILE_TOOL_GUIDANCE.items()
+                    if name in enabled and tools.get(name) is BUILTIN_TOOLS[name]
+                ]
+                if rules and "bash" in enabled and tools.get("bash") is BUILTIN_TOOLS["bash"]:
+                    rules.append("Reserve `bash` for tests, builds, Git, and operations the available file tools cannot handle.")
+                if rules:
+                    guidance = "Tool selection:\n" + "\n".join(f"- {rule}" for rule in rules)
+                    if messages and messages[0].role == "system":
+                        guidance = "\n\n".join(filter(None, (messages[0].content, guidance)))
+                        request = LLMRequest([Message.system(guidance), *messages[1:]], request.tools, request.params)
+                    else:
+                        request = LLMRequest([Message.system(guidance), *messages], request.tools, request.params)
 
             response = self._call_llm(ctx, request, step)
             usage = usage + response.usage
