@@ -24,11 +24,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
+from agentharness.core.compaction import compact_request
 from agentharness.core.context import RunContext
 from agentharness.core.messages import LLMResponse, Message, ToolCall, Usage
 from agentharness.core.runtime import Runtime, default_runtime
 from agentharness.core.streaming import RunCancelled, RunStream, current_stream
-from agentharness.core.tracing import emit_stream, span
+from agentharness.core.tracing import emit_stream, log, span
 from agentharness.llm.base import LLM, LLMError, LLMRequest
 from agentharness.tools.base import Tool, ToolError
 from agentharness.tools.builtin import ALL as BUILTIN_TOOLS
@@ -102,6 +103,7 @@ class Agent(Runnable):
         use_runtime_tools: bool = True,
         llm_params: dict[str, Any] | None = None,
         prefer_file_tools: bool = True,
+        context_budget_bytes: int | None = None,
     ):
         self.name = name
         self.llm = llm
@@ -117,6 +119,9 @@ class Agent(Runnable):
         self.use_runtime_tools = use_runtime_tools
         self.llm_params = dict(llm_params or {})
         self.prefer_file_tools = prefer_file_tools
+        if context_budget_bytes is not None and context_budget_bytes <= 0:
+            raise ValueError("context_budget_bytes must be positive")
+        self.context_budget_bytes = context_budget_bytes
 
     # ---- tool management ---------------------------------------------
     def add_tool(self, t: Tool) -> Tool:
@@ -202,6 +207,11 @@ class Agent(Runnable):
                     else:
                         request = LLMRequest([Message.system(guidance), *messages], request.tools, request.params)
 
+            if self.context_budget_bytes is not None:
+                request, before, after = compact_request(request, self.context_budget_bytes)
+                if before != after:
+                    log(rt, "Context compacted", step=step, before_bytes=before, after_bytes=after,
+                        budget_bytes=self.context_budget_bytes)
             response = self._call_llm(ctx, request, step)
             usage = usage + response.usage
             msg = response.message

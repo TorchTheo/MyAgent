@@ -8,9 +8,47 @@ import pytest
 
 from agentharness import (Agent, LLMRequest, Message, OpenAICompatLLM, Parallel, Plugin, Runtime, ScriptedLLM,
                           Sequential, ToolCall, ToolPolicyPlugin, builtin_tools, tool)
+from agentharness.core.compaction import compact_request
+from agentharness.llm.base import LLMError
 from agentharness.viewer.server import make_server
 
 S = ScriptedLLM
+
+
+def test_context_budget_preserves_latest_parallel_calls_and_history(rt):
+    @tool
+    def large() -> str:
+        """Return a large result."""
+        return "数据" * 2000
+
+    llm = S([
+        S.tool_call("large"),
+        S.tool_calls(("large", {}), ("large", {})),
+        S.text("done"),
+    ])
+    agent = Agent("bounded", llm, "System instructions", [large], runtime=rt,
+                  context_budget_bytes=1600)
+    result = agent.stream("User goal").result
+    final_request = llm.requests[-1]
+    assert final_request[0].content == "System instructions"
+    assert final_request[1].content == "User goal"
+    calls = [call.id for msg in final_request for call in msg.tool_calls]
+    outputs = [msg for msg in final_request if msg.role == "tool"]
+    assert len(calls) == 2
+    assert {msg.tool_call_id for msg in outputs} == set(calls)
+    assert all(len(msg.content) < 4000 for msg in outputs)
+    assert sum(msg.role == "tool" for msg in result.messages) == 3
+    assert all(len(msg.content) == 4000 for msg in result.messages if msg.role == "tool")
+    _, before, after = compact_request(LLMRequest(final_request, [large.schema()]), 1600)
+    assert before == after <= 1600
+
+
+def test_context_budget_rejects_oversized_required_context(rt):
+    llm = S([S.text("unused")])
+    agent = Agent("bounded", llm, runtime=rt, context_budget_bytes=200)
+    with pytest.raises(LLMError, match="cannot fit"):
+        agent.run("goal " * 1000)
+    assert llm.requests == []
 
 
 def events(rt, trace_id):

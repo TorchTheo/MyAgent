@@ -12,7 +12,7 @@
 ## 安装
 
 ```bash
-pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.3"
+pip install "git+https://github.com/TorchTheo/MyAgent.git@v0.0.4"
 ```
 
 ## 快速开始
@@ -136,6 +136,17 @@ for e in agent.stream("..."):        # 完整事件流
 - `ConsolePlugin` 在流式运行时实时打印模型输出。
 - token 增量默认**不写入 trace**（文件会变得很大，最终内容始终会记录）。`Runtime(trace_stream=True)` 开启后，
   查看器会对运行中的 trace 实时显示正在生成的内容。
+
+## 上下文预算
+
+给 `Agent` 传入 `context_budget_bytes=64_000` 可启用上下文压缩，默认关闭。
+预算以框架序列化消息和工具定义后的 UTF-8 字节数计量。模型的 token 上限需要另行考虑，
+实际 HTTP 请求还会包含模型名称和后端参数。
+
+超过预算时，框架保留系统和用户消息、最近的交互以及成组的工具调用和结果。
+它从最早的交互开始压缩，有空间时保留历史摘录，必要时缩短工具输出。
+压缩只作用于发给模型的请求，`RunResult.messages` 仍保留原始消息。
+trace 会记录压缩前后的字节数。必需内容仍超过预算时会在调用模型前抛出 `LLMError`。
 
 ## Trace 格式
 
